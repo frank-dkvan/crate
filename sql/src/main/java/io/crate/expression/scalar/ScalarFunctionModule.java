@@ -21,6 +21,7 @@
 
 package io.crate.expression.scalar;
 
+import io.crate.data.Input;
 import io.crate.expression.scalar.arithmetic.AbsFunction;
 import io.crate.expression.scalar.arithmetic.ArithmeticFunctions;
 import io.crate.expression.scalar.arithmetic.ArrayFunction;
@@ -56,10 +57,14 @@ import io.crate.expression.scalar.systeminformation.PgGetExpr;
 import io.crate.expression.scalar.timestamp.CurrentTimestampFunction;
 import io.crate.metadata.FunctionIdent;
 import io.crate.metadata.FunctionImplementation;
+import io.crate.metadata.FunctionInfo;
 import io.crate.metadata.FunctionResolver;
+import io.crate.metadata.Scalar;
+import io.crate.types.DataTypes;
 import org.elasticsearch.common.inject.AbstractModule;
 import org.elasticsearch.common.inject.multibindings.MapBinder;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -142,6 +147,17 @@ public class ScalarFunctionModule extends AbstractModule {
         PgGetExpr.register(this);
 
         PgBackendPidFunction.register(this);
+        register(new Scalar<String, Void>() {
+            @Override
+            public FunctionInfo info() {
+                return new FunctionInfo(new FunctionIdent("current_database", Collections.emptyList()), DataTypes.STRING);
+            }
+
+            @Override
+            public String evaluate(Input[] args) {
+                return "CrateDB";
+            }
+        });
 
         // bind all registered functions and resolver
         // by doing it here instead of the register functions, plugins can also use the

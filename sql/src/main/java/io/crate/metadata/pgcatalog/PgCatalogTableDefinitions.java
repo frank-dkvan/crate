@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
+import static java.util.Collections.singletonList;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public class PgCatalogTableDefinitions {
@@ -53,6 +54,11 @@ public class PgCatalogTableDefinitions {
                          // we also need to check for views which have privileges set
                          || user.hasAnyPrivilege(Privilege.Clazz.VIEW, t.ident().fqn()),
             PgClassTable.expressions()
+        ));
+        tableDefinitions.put(PgDatabaseTable.NAME, new StaticTableDefinition<>(
+            () -> singletonList(null),
+            ((user, o) -> true),
+            PgDatabaseTable.expressions()
         ));
         tableDefinitions.put(PgNamespaceTable.IDENT, new StaticTableDefinition<>(
             informationSchemaIterables::schemas,
