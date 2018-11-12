@@ -22,13 +22,20 @@
 
 package io.crate.integrationtests;
 
+import com.carrotsearch.randomizedtesting.annotations.Repeat;
+import com.carrotsearch.randomizedtesting.annotations.Seed;
 import io.crate.data.Bucket;
 import io.crate.data.CollectionBucket;
 import io.crate.data.Row;
+import io.crate.metadata.ColumnIdent;
 import io.crate.metadata.PartitionName;
+import io.crate.metadata.Reference;
 import io.crate.metadata.RelationName;
+import io.crate.metadata.Schemas;
+import io.crate.metadata.table.TableInfo;
 import io.crate.testing.SQLResponse;
 import io.crate.testing.SQLTransportExecutor;
+import io.crate.testing.UseJdbc;
 import org.elasticsearch.action.admin.cluster.reroute.ClusterRerouteRequestBuilder;
 import org.elasticsearch.action.admin.cluster.state.ClusterStateResponse;
 import org.elasticsearch.cluster.metadata.MetaData;
@@ -41,6 +48,7 @@ import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Priority;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.test.ESIntegTestCase;
+import org.elasticsearch.test.junit.annotations.TestLogging;
 import org.hamcrest.Matchers;
 import org.junit.Test;
 
@@ -56,11 +64,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.carrotsearch.randomizedtesting.RandomizedTest.$;
 import static com.carrotsearch.randomizedtesting.RandomizedTest.randomAsciiLettersOfLength;
+import static io.crate.testing.TestingHelpers.printedTable;
 import static org.hamcrest.core.Is.is;
 
 // disabling the transport clients because the _other_ types of nodes are likely to load a CrateDB license in the
 // metadata custom and these transport clients will not be able to deserialize it (as they're not part of the cluster)
 @ESIntegTestCase.ClusterScope(numDataNodes = 2, transportClientRatio = 0)
+@Seed("A05BEF3F4DE40BA5")
+@UseJdbc(0)
 public class PartitionedTableConcurrentIntegrationTest extends SQLTransportIntegrationTest {
 
     private final TimeValue ACCEPTABLE_RELOCATION_TIME = new TimeValue(10, TimeUnit.SECONDS);
@@ -394,17 +405,20 @@ public class PartitionedTableConcurrentIntegrationTest extends SQLTransportInteg
     }
 
     @Test
+    @Repeat (iterations = 500)
+    @TestLogging("io.crate:TRACE")
     public void testConcurrentPartitionCreationWithColumnCreationTypeMissMatch() throws Exception {
         // dynamic column creation must result in a consistent type across partitions
-        execute("create table t1 (p int) " +
+        execute("create table doc.t1 (p int) " +
                 "clustered into 1 shards " +
                 "partitioned by (p) " +
                 "with (number_of_replicas = 0)");
 
         Thread insertNumbers = new Thread(() -> {
             for (int i = 0; i < 10; i++) {
-                try {
-                    execute("insert into t1 (p, x) values (?, ?)", $(i, i));
+                try
+                {
+                    execute("insert into doc.t1 (p, x) values (?, ?)", $(i, i));
                 } catch (Throwable e) {
                     // may fail if other thread is faster
                 }
@@ -413,7 +427,7 @@ public class PartitionedTableConcurrentIntegrationTest extends SQLTransportInteg
         Thread insertStrings = new Thread(() -> {
             for (int i = 0; i < 10; i++) {
                 try {
-                    execute("insert into t1 (p, x) values (?, ?)", $(i, "foo" + i));
+                    execute("insert into doc.t1 (p, x) values (?, ?)", $(i, "foo" + i));
                 } catch (Throwable e) {
                     // may fail if other thread is faster
                 }
@@ -427,6 +441,17 @@ public class PartitionedTableConcurrentIntegrationTest extends SQLTransportInteg
         insertStrings.join();
 
         // this query should never fail
-        execute("select * from t1 order by x limit 50");
+        try {
+            execute("select * from doc.t1 order by x limit 50");
+        } catch (Throwable t) {
+            for (Schemas schemas : internalCluster().getInstances(Schemas.class)) {
+                TableInfo tableInfo = schemas.getTableInfo(new RelationName("doc", "t1"));
+                Reference ref = tableInfo.getReference(new ColumnIdent("x"));
+                logger.warn("Ref={}", ref);
+            }
+            execute("select _raw from doc.t1");
+            logger.warn("inserted rows {} ", printedTable(response.rows()));
+            throw t;
+        }
     }
 }

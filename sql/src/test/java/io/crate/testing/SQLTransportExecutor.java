@@ -305,10 +305,9 @@ public class SQLTransportExecutor {
                 }
             }
         } catch (PSQLException e) {
-            LOGGER.error("Error executing stmt={} args={}", stmt, Arrays.toString(args));
+            LOGGER.error("Error executing stmt={} args={} error={}", stmt, Arrays.toString(args), e);
             ServerErrorMessage serverErrorMessage = e.getServerErrorMessage();
             final StackTraceElement[] stacktrace;
-            //noinspection ThrowableNotThrown add the test-call-chain to the stack to be able
             // to quickly figure out which statement in a test case led to the error
             StackTraceElement[] traceToExecWithPg = new Exception().getStackTrace();
             if (serverErrorMessage == null) {

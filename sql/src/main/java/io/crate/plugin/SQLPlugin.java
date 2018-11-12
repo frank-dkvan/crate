@@ -56,7 +56,6 @@ import io.crate.metadata.rule.ingest.IngestRulesMetaData;
 import io.crate.metadata.settings.AnalyzerSettings;
 import io.crate.metadata.settings.CrateSettings;
 import io.crate.metadata.sys.MetaDataSysModule;
-import io.crate.metadata.upgrade.IndexTemplateUpgrader;
 import io.crate.metadata.upgrade.MetaDataIndexUpgrader;
 import io.crate.metadata.view.ViewsMetaData;
 import io.crate.monitor.MonitorModule;
@@ -68,7 +67,6 @@ import io.crate.user.UserFallbackModule;
 import org.elasticsearch.action.bulk.BulkModule;
 import org.elasticsearch.cluster.NamedDiff;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
-import org.elasticsearch.cluster.metadata.IndexTemplateMetaData;
 import org.elasticsearch.cluster.metadata.MetaData;
 import org.elasticsearch.cluster.routing.allocation.decider.AllocationDecider;
 import org.elasticsearch.common.ParseField;
@@ -305,8 +303,11 @@ public class SQLPlugin extends Plugin implements ActionPlugin, MapperPlugin, Clu
         return new MetaDataIndexUpgrader(settings);
     }
 
+    /*
     @Override
     public UnaryOperator<Map<String, IndexTemplateMetaData>> getIndexTemplateMetaDataUpgrader() {
+
         return new IndexTemplateUpgrader(settings);
     }
+    */
 }

@@ -90,6 +90,10 @@ public class SQLExceptions {
         return result;
     }
 
+    public static Exception asException(Throwable t) {
+        return t instanceof Exception ? (Exception) t : new RuntimeException(t);
+    }
+
     public static Throwable unwrap(@Nonnull Throwable t) {
         return unwrap(t, null);
     }

@@ -59,6 +59,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import static io.crate.exceptions.SQLExceptions.asException;
+import static io.crate.exceptions.SQLExceptions.unwrap;
+
 /**
  * Base class for performing Crate-specific TransportWriteActions like Delete or Upsert.
  * @param <Request> The ShardRequest implementation including a replicated write request
@@ -129,7 +132,6 @@ public abstract class TransportShardAction<Request extends ShardRequest<Request,
         activeOperations.put(request.jobId(), callable);
         WrapperResponse response;
         try {
-            //noinspection unchecked
             response = callable.call();
         } catch (Throwable e) {
             throw Throwables.propagate(e);
@@ -182,8 +184,8 @@ public abstract class TransportShardAction<Request extends ShardRequest<Request,
         if (result.getResultType() == Engine.Result.Type.MAPPING_UPDATE_REQUIRED) {
             try {
                 mappingUpdate.updateMappings(result.getRequiredMappingUpdate(), shardId, Constants.DEFAULT_MAPPING_TYPE);
-            } catch (Exception e) {
-                return onMappingUpdateError.apply(e);
+            } catch (Throwable t) {
+                return onMappingUpdateError.apply(asException(unwrap(t)));
             }
             result = execute.get();
             if (result.getResultType() == Engine.Result.Type.MAPPING_UPDATE_REQUIRED) {

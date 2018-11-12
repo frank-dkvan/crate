@@ -23,6 +23,7 @@
 package io.crate.execution.dml.upsert;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.crate.exceptions.SQLExceptions;
 import io.crate.execution.ddl.SchemaUpdateClient;
 import io.crate.execution.dml.ShardResponse;
 import io.crate.execution.dml.TransportShardAction;
@@ -41,6 +42,7 @@ import io.crate.metadata.table.Operation;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.action.support.ActionFilters;
+import org.elasticsearch.action.support.replication.TransportReplicationAction;
 import org.elasticsearch.cluster.action.shard.ShardStateAction;
 import org.elasticsearch.cluster.metadata.IndexNameExpressionResolver;
 import org.elasticsearch.cluster.service.ClusterService;
@@ -75,6 +77,8 @@ import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static io.crate.exceptions.SQLExceptions.asException;
+import static io.crate.exceptions.SQLExceptions.unwrap;
 import static io.crate.exceptions.SQLExceptions.userFriendlyCrateExceptionTopOnly;
 
 /**
@@ -150,7 +154,8 @@ public class TransportShardUpsertAction extends TransportShardAction<ShardUpsert
                 if (translogLocation != null) {
                     shardResponse.add(location);
                 }
-            } catch (Exception e) {
+            } catch (Throwable t) {
+                Exception e = asException(unwrap(t));
                 if (retryPrimaryException(e)) {
                     if (e instanceof RuntimeException) {
                         throw (RuntimeException) e;
@@ -200,6 +205,18 @@ public class TransportShardUpsertAction extends TransportShardAction<ShardUpsert
                 false,
                 sourceToParse
             );
+            if (indexResult.getResultType() == Engine.Result.Type.MAPPING_UPDATE_REQUIRED) {
+                // Even though the primary waits on all nodes to ack the mapping changes to the master
+                // (see MappingUpdatedAction.updateMappingOnMaster) we still need to protect against missing mappings
+                // and wait for them. The reason is concurrent requests. Request r1 which has new field f triggers a
+                // mapping update. Assume that that update is first applied on the primary, and only later on the replica
+                // (it’s happening concurrently). Request r2, which now arrives on the primary and which also has the new
+                // field f might see the updated mapping (on the primary), and will therefore proceed to be replicated
+                // to the replica. When it arrives on the replica, there’s no guarantee that the replica has already
+                // applied the new mapping, so there is no other option than to wait.
+                throw new TransportReplicationAction.RetryOnReplicaException(indexShard.shardId(),
+                    "Mappings are not available on the replica yet, triggered update: " + indexResult.getRequiredMappingUpdate());
+            }
             location = indexResult.getTranslogLocation();
         }
         return new WriteReplicaResult<>(request, location, null, indexShard, logger);
@@ -211,7 +228,7 @@ public class TransportShardUpsertAction extends TransportShardAction<ShardUpsert
                                         IndexShard indexShard,
                                         boolean tryInsertFirst,
                                         @Nullable UpdateSourceGen updateSourceGen,
-                                        @Nullable InsertSourceGen insertSourceGen) throws Exception {
+                                        @Nullable InsertSourceGen insertSourceGen) throws Throwable {
         VersionConflictEngineException lastException = null;
         for (int retryCount = 0; retryCount < MAX_RETRY_LIMIT; retryCount++) {
             try {
@@ -261,7 +278,7 @@ public class TransportShardUpsertAction extends TransportShardAction<ShardUpsert
                                           boolean tryInsertFirst,
                                           UpdateSourceGen updateSourceGen,
                                           InsertSourceGen insertSourceGen,
-                                          boolean isRetry) throws Exception {
+                                          boolean isRetry) throws Throwable {
         long version;
         // try insert first without fetching the document
         if (tryInsertFirst) {
@@ -301,16 +318,29 @@ public class TransportShardUpsertAction extends TransportShardAction<ShardUpsert
             ),
             e -> indexShard.getFailedIndexResult(e, finalVersion)
         );
-        Exception failure = indexResult.getFailure();
-        if (failure != null) {
-            throw failure;
+        switch (indexResult.getResultType()) {
+            case SUCCESS:
+                // update the seqNo and version on request for the replicas
+                item.seqNo(indexResult.getSeqNo());
+                item.version(indexResult.getVersion());
+                if (logger.isWarnEnabled()) {
+                    BytesReference source = item.source();
+                    logger.warn("inserted on primary doc={}", source == null ? null : source.utf8ToString());
+                }
+                return indexResult.getTranslogLocation();
+
+            case FAILURE:
+                if (logger.isWarnEnabled()) {
+                    BytesReference source = item.source();
+                    logger.warn("failure on insert doc={} failure={}", source == null ? null : source.utf8ToString(), indexResult.getFailure());
+                }
+                Exception failure = indexResult.getFailure();
+                assert failure != null : "failure must be present if resultType is failure";
+                throw SQLExceptions.unwrap(failure);
+
+            default:
+                throw new AssertionError("Unexpected indexResult: " + indexResult);
         }
-
-        // update the seqNo and version on request for the replicas
-        item.seqNo(indexResult.getSeqNo());
-        item.version(indexResult.getVersion());
-
-        return indexResult.getTranslogLocation();
     }
 
     private static GetResult getDocument(IndexShard indexShard,
