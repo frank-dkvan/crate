@@ -22,50 +22,54 @@
 # with Crate.  Your use of the Enterprise Features if governed by the terms
 # and conditions of your Enterprise or Subscription Agreement with Crate.
 
-import os
-import pathlib
-from testutils.paths import crate_path, project_root
-from dnslib.server import DNSServer
-from dnslib.zoneresolver import ZoneResolver
+from testutils.paths import crate_path
+from testutils.ports import GLOBAL_PORT_POOL
 from crate.testing.layer import CrateLayer
 from crate.client import connect
-from testutils.ports import GLOBAL_PORT_POOL
-
-CRATE_HTTP_PORT = GLOBAL_PORT_POOL.get()
-CRATE_TRANSPORT_PORT = 44300
-DNS_PORT = 50053
-
-zone_file = pathlib.Path(os.path.abspath(os.path.join(
-    project_root, 'blackbox', 'dns_discovery', 'crate.internal.zone')))
-
-dns_server = DNSServer(ZoneResolver(open(zone_file)), port=DNS_PORT)
+from dnslib.server import DNSServer
+from dnslib.zoneresolver import ZoneResolver
 
 
 def main():
     num_nodes = 3
-    crate_layers = []
 
+    node0_http_port = GLOBAL_PORT_POOL.get()
+    dns_port = GLOBAL_PORT_POOL.get()
+    transport_ports = []
+    zone_file = '''
+crate.internal.               600   IN   SOA   localhost localhost ( 2007120710 1d 2h 4w 1h )
+crate.internal.               400   IN   NS    localhost
+crate.internal.               600   IN   A     127.0.0.1'''
+
+    for i in range(0, num_nodes):
+        port = GLOBAL_PORT_POOL.get()
+        transport_ports.append(port)
+        zone_file += '''
+_test._srv.crate.internal.    600   IN   SRV   1 10 {port} 127.0.0.1.'''.format(port=port)
+
+    dns_server = DNSServer(ZoneResolver(zone_file), port=dns_port)
     dns_server.start_thread()
 
+    crate_layers = []
     for i in range(0, num_nodes):
         crate_layer = CrateLayer(
             'node-' + str(i),
             cluster_name='crate-dns-discovery',
             crate_home=crate_path(),
-            port=CRATE_HTTP_PORT if i == 0 else GLOBAL_PORT_POOL.get(),
-            transport_port=CRATE_TRANSPORT_PORT + i,
+            port=node0_http_port if i == 0 else GLOBAL_PORT_POOL.get(),
+            transport_port=transport_ports[i],
             settings={
                 'psql.port': GLOBAL_PORT_POOL.get(),
                 "discovery.zen.hosts_provider": "srv",
                 "discovery.srv.query": "_test._srv.crate.internal.",
-                "discovery.srv.resolver": "127.0.0.1:" + str(DNS_PORT)
+                "discovery.srv.resolver": "127.0.0.1:" + str(dns_port)
             }
         )
         crate_layers.append(crate_layer)
         crate_layer.start()
 
     try:
-        conn = connect('localhost:{}'.format(CRATE_HTTP_PORT))
+        conn = connect('localhost:{}'.format(node0_http_port))
         c = conn.cursor()
         c.execute('''select count() from sys.nodes''')
         result = c.fetchone()
